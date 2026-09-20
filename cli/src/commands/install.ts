@@ -270,7 +270,7 @@ export async function installGitPayload(repo: string, sha: string, runCommand: C
   const pnpmShimDir = path.join(stagingRoot, "pnpm-bin");
   fs.mkdirSync(pnpmShimDir, { recursive: true, mode: 0o700 });
   const buildEnv = (extra: NodeJS.ProcessEnv = {}) =>
-    gitBuildEnv({ PATH: [pnpmShimDir, process.env.PATH].filter(Boolean).join(path.delimiter), ...extra });
+    gitBuildEnv({ PATH: [pnpmShimDir, process.env.PATH].filter(Boolean).join(path.delimiter), ...extra, PAPERCLIP_BUILD_COMMIT: sha, PAPERCLIP_README_ASSET_REF: sha });
   try {
     await runGitHubCurl(["--fail", "--silent", "--show-error", "--location", "--output", archivePath, `https://codeload.github.com/${repo}/tar.gz/${sha}`], runCommand, { maxBuffer: 4 * 1024 * 1024 });
     await runCommand("tar", ["-xzf", archivePath, "--strip-components=1", "-C", checkoutPath], { maxBuffer: 4 * 1024 * 1024 });
@@ -284,6 +284,11 @@ export async function installGitPayload(repo: string, sha: string, runCommand: C
     for (const [index, workspacePackage] of workspacePackages.entries()) {
       const packageDir = path.join(checkoutPath, workspacePackage.dir);
       const packageJson = JSON.parse(fs.readFileSync(path.join(packageDir, "package.json"), "utf8")) as { bundleDependencies?: string[]; bundledDependencies?: string[] };
+      // Match release.sh: these assets are not checked into each package directory.
+      if (["server", "packages/adapters/claude-local", "packages/adapters/codex-local"].includes(workspacePackage.dir)) {
+        fs.rmSync(path.join(packageDir, "skills"), { recursive: true, force: true });
+        fs.cpSync(path.join(checkoutPath, "skills"), path.join(packageDir, "skills"), { recursive: true });
+      }
       const bundledDependencies = packageJson.bundleDependencies ?? packageJson.bundledDependencies ?? [];
       if (bundledDependencies.length > 0) {
         const stagedPackage = path.join(stagingRoot, `workspace-package-${index}`);
