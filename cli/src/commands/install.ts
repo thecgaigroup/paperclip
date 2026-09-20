@@ -294,8 +294,8 @@ export async function installGitPayload(repo: string, sha: string, runCommand: C
         const stagedPackage = path.join(stagingRoot, `workspace-package-${index}`);
         await runCommand(process.execPath, [path.join(checkoutPath, "scripts", "prepare-bundled-package.mjs"), packageDir, stagedPackage], { cwd: checkoutPath, env: buildEnv(), maxBuffer: 32 * 1024 * 1024 });
         // Staging contains built publish assets, not the source needed by prepack.
-        // Match release-lib.sh's bundled pack behavior after the explicit builds.
-        await runCommand("npm", ["pack", stagedPackage, "--pack-destination", stagingRoot, "--ignore-scripts"], { cwd: checkoutPath, env: buildEnv(), maxBuffer: 16 * 1024 * 1024 });
+        // Match release-lib.sh's pinned pack tool and lifecycle after explicit builds.
+        await runCommand("npx", ["--yes", "npm@10.9.7", "pack", stagedPackage, "--pack-destination", stagingRoot, "--ignore-scripts"], { cwd: checkoutPath, env: buildEnv(), maxBuffer: 16 * 1024 * 1024 });
       } else {
         await runCommand("corepack", ["pnpm", "--dir", workspacePackage.dir, "pack", "--pack-destination", stagingRoot], { cwd: checkoutPath, env: buildEnv({ PAPERCLIP_RELEASE_REUSE_UI_DIST: "1" }), maxBuffer: 32 * 1024 * 1024 });
       }
