@@ -1470,3 +1470,22 @@ from stored configuration problems. Verify connection transport and endpoint
 fields before disabling a connection. Verify workspace ownership, active runs,
 Git state, and runtime-service readiness before closing a workspace. A missing
 URL or old workspace timestamp alone does not prove that a row is disposable.
+
+
+## Start with task admission held
+
+For maintenance on an existing instance, set `PAPERCLIP_START_IN_TASK_DRAIN=true`
+in its process environment before starting the server. The server initializes
+its native task drain before binding the listener or running heartbeat recovery,
+so persisted queued runs cannot race an operator's post-start drain request.
+The hold has no expiry and is visible through `GET /api/instance/task-drain`.
+It does not pause companies or modify their budgets.
+
+After verifying the new runtime, use the existing authenticated board operation
+`DELETE /api/instance/task-drain` to release admission without restarting.
+The environment flag is read only at process initialization; it does not reapply
+the hold after release. If retained in a service environment, the next restart
+starts drained again. Remove the maintenance-only environment setting after
+acceptance if subsequent restarts should resume normal operation. When absent
+or false, startup behavior is unchanged. Existing persisted queued/running rows
+must be inspected separately: the drain status counters describe in-process work.
