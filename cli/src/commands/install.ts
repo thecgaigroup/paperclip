@@ -283,9 +283,9 @@ export async function installGitPayload(repo: string, sha: string, runCommand: C
     const workspacePackages = resolveGitInstallWorkspacePackages(checkoutPath);
     for (const [index, workspacePackage] of workspacePackages.entries()) {
       const packageDir = path.join(checkoutPath, workspacePackage.dir);
-      const packageJson = JSON.parse(fs.readFileSync(path.join(packageDir, "package.json"), "utf8")) as { files?: string[]; bundleDependencies?: string[]; bundledDependencies?: string[] };
+      const packageJson = JSON.parse(fs.readFileSync(path.join(packageDir, "package.json"), "utf8")) as { bundleDependencies?: string[]; bundledDependencies?: string[] };
       // Match release.sh: these assets are not checked into each package directory.
-      if (packageJson.files?.includes("skills")) {
+      if (["server", "packages/adapters/claude-local", "packages/adapters/codex-local"].includes(workspacePackage.dir)) {
         fs.rmSync(path.join(packageDir, "skills"), { recursive: true, force: true });
         fs.cpSync(path.join(checkoutPath, "skills"), path.join(packageDir, "skills"), { recursive: true });
       }

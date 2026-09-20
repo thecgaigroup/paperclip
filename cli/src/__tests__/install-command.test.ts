@@ -116,6 +116,8 @@ describe("managed install commands", () => {
           { dir: "packages/db", name: "@paperclipai/db", packageJson: { name: "@paperclipai/db", version: "0.3.1", dependencies: { "@paperclipai/shared": "workspace:*" }, bundleDependencies: ["embedded-postgres"] } },
           { dir: "server", name: "@paperclipai/server", packageJson: { name: "@paperclipai/server", version: "0.3.1", dependencies: { "@paperclipai/db": "workspace:*" } } },
         ];
+        fs.mkdirSync(path.join(checkout, "skills/paperclip"), { recursive: true });
+        fs.writeFileSync(path.join(checkout, "skills/paperclip/SKILL.md"), "canonical skills");
         fs.mkdirSync(path.join(checkout, "cli"), { recursive: true });
         fs.writeFileSync(path.join(checkout, "cli", "package.json"), JSON.stringify({ version: "0.3.1" }));
         fs.mkdirSync(path.join(checkout, "scripts"), { recursive: true });
@@ -208,7 +210,7 @@ describe("managed install commands", () => {
     expect(prepared).toBe(true);
   });
 
-  it.each([false, true])("prepares declared skills before packaging (missing source: %s)", async (missingSource) => {
+  it.each([false, true])("prepares release skills before packaging (missing source: %s)", async (missingSource) => {
     const sha = (missingSource ? "1" : "2").repeat(40);
     const paths = resolveInstallStorePaths();
     const baseRunner = createGitCheckoutRunCommand(sha);
@@ -221,21 +223,46 @@ describe("managed install commands", () => {
       if (bundled || plain) {
         packagingAttempts += 1;
         const dir = bundled ? args[1] : path.join(checkout, args[args.indexOf("--dir") + 1]);
-        expect(fs.readFileSync(path.join(dir, "skills/paperclip/SKILL.md"), "utf8")).toBe("canonical skills");
-        packaged.push(path.relative(checkout, dir));
+        const relativeDir = path.relative(checkout, dir);
+        if (["server", "packages/adapters/claude-local", "packages/adapters/codex-local"].includes(relativeDir)) {
+          expect(fs.readFileSync(path.join(dir, "skills/paperclip/SKILL.md"), "utf8")).toBe("canonical skills");
+          packaged.push(relativeDir);
+          if (bundled) {
+            fs.mkdirSync(args[2], { recursive: true });
+            fs.writeFileSync(path.join(args[2], "package.json"), JSON.stringify({ name: "@paperclipai/server" }));
+            return { stdout: "", stderr: "" };
+          }
+        } else {
+          expect(fs.existsSync(path.join(dir, "skills"))).toBe(false);
+        }
+        if (plain && relativeDir.startsWith("packages/adapters/")) {
+          fs.writeFileSync(path.join(args[args.indexOf("--pack-destination") + 1], `${path.basename(dir)}-0.3.1.tgz`), "package");
+          return { stdout: "", stderr: "" };
+        }
+      }
+      if (file === "npm" && args[0] === "pack" && args[1]?.includes("workspace-package-") &&
+          JSON.parse(fs.readFileSync(path.join(args[1], "package.json"), "utf8")).name === "@paperclipai/server") {
+        fs.writeFileSync(path.join(args[args.indexOf("--pack-destination") + 1], "paperclipai-server-0.3.1.tgz"), "package");
+        return { stdout: "", stderr: "" };
       }
       const result = await baseRunner(file, args, options);
       if (file === "tar") {
         checkout = args[args.indexOf("-C") + 1];
-        for (const dir of ["packages/shared", "packages/db", "server"]) {
-          const manifest = path.join(checkout, dir, "package.json");
-          expect(fs.existsSync(path.join(checkout, dir, "skills"))).toBe(false);
-          fs.writeFileSync(manifest, JSON.stringify({ ...JSON.parse(fs.readFileSync(manifest, "utf8")), files: ["skills"] }));
+        const manifestPath = path.join(checkout, "scripts/release-package-manifest.json");
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+        const serverPath = path.join(checkout, "server/package.json");
+        const server = JSON.parse(fs.readFileSync(serverPath, "utf8"));
+        for (const adapter of ["claude-local", "codex-local", "cursor-local"]) {
+          const dir = `packages/adapters/${adapter}`;
+          const name = `@paperclipai/${adapter}`;
+          fs.mkdirSync(path.join(checkout, dir), { recursive: true });
+          fs.writeFileSync(path.join(checkout, dir, "package.json"), JSON.stringify({ name, version: "0.3.1", files: ["skills"] }));
+          manifest.push({ dir, name });
+          server.dependencies[name] = "workspace:*";
         }
-        if (!missingSource) {
-          fs.mkdirSync(path.join(checkout, "skills/paperclip"), { recursive: true });
-          fs.writeFileSync(path.join(checkout, "skills/paperclip/SKILL.md"), "canonical skills");
-        }
+        fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+        fs.writeFileSync(serverPath, JSON.stringify({ ...server, bundleDependencies: ["express"] }));
+        if (missingSource) fs.rmSync(path.join(checkout, "skills"), { recursive: true });
       }
       return result;
     };
@@ -243,13 +270,13 @@ describe("managed install commands", () => {
     if (missingSource) {
       await expect(install).rejects.toThrow(/ENOENT/);
       expect(packaged).toEqual([]);
-      expect(packagingAttempts).toBe(0);
+      expect(packagingAttempts).toBe(2); // Only shared and db precede the first skills recipient.
       expect(fs.existsSync(payloadPathFor(paths, "git", sha.slice(0, 12)))).toBe(false);
       expect(readInstallManifest(paths)).toBeNull();
       expect(baseRunner.mock.calls.some(([file, args]) => file === "npm" && args[0] === "install")).toBe(false);
     } else {
       await expect(install).resolves.toMatchObject({ version: "0.3.1", reused: false });
-      expect(packaged).toEqual(["packages/shared", "packages/db", "server"]);
+      expect(packaged).toEqual(["packages/adapters/claude-local", "packages/adapters/codex-local", "server"]);
     }
   });
 
