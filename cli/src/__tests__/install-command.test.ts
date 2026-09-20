@@ -171,6 +171,39 @@ describe("managed install commands", () => {
     expect(installCall?.[1].filter((arg) => arg.endsWith(".tgz"))).toHaveLength(4);
   });
 
+  it("packs prepared bundled assets without rerunning source-only lifecycle scripts", async () => {
+    const sha = "9".repeat(40);
+    const baseRunner = createGitCheckoutRunCommand(sha);
+    let packed = false;
+    const runCommand: CommandRunner = async (file, args, options) => {
+      if (file === process.execPath && args[0]?.endsWith("prepare-bundled-package.mjs")) {
+        fs.mkdirSync(path.join(args[2], "dist"), { recursive: true });
+        fs.writeFileSync(path.join(args[2], "dist/index.js"), "export const ready = true;\n");
+        fs.writeFileSync(path.join(args[2], "package.json"), JSON.stringify({
+          name: "@paperclipai/db", version: "0.3.1", files: ["dist"],
+          scripts: { prepack: "node missing-source-build-script.js" },
+        }));
+        return { stdout: "", stderr: "" };
+      }
+      if (file === "npm" && args[0] === "pack" && args[1]?.includes("workspace-package-")) {
+        const stdout = execFileSync(file, args, {
+          cwd: options?.cwd, encoding: "utf8", timeout: 30_000,
+          env: { ...options?.env, PATH: ORIGINAL_ENV.PATH, npm_config_offline: "true" },
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        const archive = path.join(args[args.indexOf("--pack-destination") + 1], "paperclipai-db-0.3.1.tgz");
+        expect(execFileSync("tar", ["-xOf", archive, "package/dist/index.js"], { encoding: "utf8" }))
+          .toBe("export const ready = true;\n");
+        packed = true;
+        return { stdout, stderr: "" };
+      }
+      return baseRunner(file, args, options);
+    };
+    await expect(installGitPayload("paperclipai/paperclip", sha, runCommand, resolveInstallStorePaths()))
+      .resolves.toMatchObject({ version: "0.3.1", reused: false });
+    expect(packed).toBe(true);
+  });
+
   it("prepares UI from a clean checkout before packaging the server", async () => {
     const sha = "e".repeat(40);
     const baseRunner = createGitCheckoutRunCommand(sha);
