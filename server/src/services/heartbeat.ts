@@ -1272,11 +1272,17 @@ const nativeSessionResumeDispatchTimers = new Map<
 >();
 // Task drain: an operator-controlled hold on new run admission, so a caller
 // can wait for active work to finish before it stops the process. The state
-// lives in process memory only — a process restart clears it — and it sits at
+// lives in process memory; an explicit startup flag can initialize a new hold. It sits at
 // module scope like activeRunExecutions above, so both the pure
 // resolveHeartbeatSchedulingSuppression() check and every heartbeatService()
 // instance see the same drain.
-let taskDrainState: { startedAt: Date; expiresAt: Date | null } | null = null;
+// Initialize before the HTTP listener and startup recovery can admit queued work.
+// This is one-shot initialization: authenticated stopTaskDrain() can release it
+// without changing the environment or restarting the process.
+let taskDrainState: { startedAt: Date; expiresAt: Date | null } | null =
+  isTruthyRuntimeEnvValue(process.env.PAPERCLIP_START_IN_TASK_DRAIN)
+    ? computeTaskDrain()
+    : null;
 
 function readTaskDrain(
   now: Date,
