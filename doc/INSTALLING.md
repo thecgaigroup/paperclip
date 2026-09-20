@@ -156,6 +156,8 @@ npx --registry https://registry.npmjs.org paperclipai install \
 ```
 
 Git-ref installs resolve the requested ref to an exact commit before building.
+The installer passes that commit to the server build stamp, including archive
+builds that have no Git metadata.
 The installer builds fresh UI assets and copies them into the server package
 before bundling it. It also copies the root runtime skills into the server, Claude, and Codex
 packages, as the release build does. A UI build or skills copy failure stops

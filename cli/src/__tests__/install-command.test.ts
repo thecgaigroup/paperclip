@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -295,6 +296,33 @@ describe("managed install commands", () => {
     expect(fs.existsSync(payloadPathFor(paths, "git", sha.slice(0, 12)))).toBe(false);
     expect(readInstallManifest(paths)).toBeNull();
     expect(baseRunner.mock.calls.some(([file, args]) => file === "npm" && args[0] === "pack")).toBe(false);
+  });
+
+  it("stamps a clean archive build with the resolved SHA instead of ambient provenance", async () => {
+    const sha = "3".repeat(40);
+    process.env.PAPERCLIP_BUILD_COMMIT = "unrelated-ambient-commit";
+    const baseRunner = createGitCheckoutRunCommand(sha);
+    let checkout = "";
+    let stampChecked = false;
+    const runCommand: CommandRunner = async (file, args, options) => {
+      if (file === "corepack" && args.includes("@paperclipai/server...")) {
+        expect(options?.env?.PAPERCLIP_BUILD_COMMIT).toBe(sha);
+        execFileSync(process.execPath, [fs.realpathSync(path.join(checkout, "server/scripts/write-build-stamp.mjs"))], { env: options?.env });
+      }
+      if (file === "corepack" && args.includes("pack") && args.includes("server")) {
+        expect(JSON.parse(fs.readFileSync(path.join(checkout, "server/dist/build-info.json"), "utf8"))).toEqual({ commit: sha });
+        stampChecked = true;
+      }
+      const result = await baseRunner(file, args, options);
+      if (file === "tar") {
+        checkout = args[args.indexOf("-C") + 1];
+        fs.mkdirSync(path.join(checkout, "server/scripts"), { recursive: true });
+        fs.copyFileSync(new URL("../../../server/scripts/write-build-stamp.mjs", import.meta.url), path.join(checkout, "server/scripts/write-build-stamp.mjs"));
+      }
+      return result;
+    };
+    await installGitPayload("paperclipai/paperclip", sha, runCommand, resolveInstallStorePaths());
+    expect(stampChecked).toBe(true);
   });
 
   it("builds git checkouts with NODE_ENV cleared so ambient production mode keeps devDependencies", async () => {
