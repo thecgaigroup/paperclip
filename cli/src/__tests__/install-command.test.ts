@@ -208,6 +208,51 @@ describe("managed install commands", () => {
     expect(prepared).toBe(true);
   });
 
+  it.each([false, true])("prepares declared skills before packaging (missing source: %s)", async (missingSource) => {
+    const sha = (missingSource ? "1" : "2").repeat(40);
+    const paths = resolveInstallStorePaths();
+    const baseRunner = createGitCheckoutRunCommand(sha);
+    const packaged: string[] = [];
+    let packagingAttempts = 0;
+    let checkout = "";
+    const runCommand: CommandRunner = async (file, args, options) => {
+      const bundled = file === process.execPath && args[0]?.endsWith("prepare-bundled-package.mjs");
+      const plain = file === "corepack" && args.includes("pack");
+      if (bundled || plain) {
+        packagingAttempts += 1;
+        const dir = bundled ? args[1] : path.join(checkout, args[args.indexOf("--dir") + 1]);
+        expect(fs.readFileSync(path.join(dir, "skills/paperclip/SKILL.md"), "utf8")).toBe("canonical skills");
+        packaged.push(path.relative(checkout, dir));
+      }
+      const result = await baseRunner(file, args, options);
+      if (file === "tar") {
+        checkout = args[args.indexOf("-C") + 1];
+        for (const dir of ["packages/shared", "packages/db", "server"]) {
+          const manifest = path.join(checkout, dir, "package.json");
+          expect(fs.existsSync(path.join(checkout, dir, "skills"))).toBe(false);
+          fs.writeFileSync(manifest, JSON.stringify({ ...JSON.parse(fs.readFileSync(manifest, "utf8")), files: ["skills"] }));
+        }
+        if (!missingSource) {
+          fs.mkdirSync(path.join(checkout, "skills/paperclip"), { recursive: true });
+          fs.writeFileSync(path.join(checkout, "skills/paperclip/SKILL.md"), "canonical skills");
+        }
+      }
+      return result;
+    };
+    const install = installGitPayload("paperclipai/paperclip", sha, runCommand, paths);
+    if (missingSource) {
+      await expect(install).rejects.toThrow(/ENOENT/);
+      expect(packaged).toEqual([]);
+      expect(packagingAttempts).toBe(0);
+      expect(fs.existsSync(payloadPathFor(paths, "git", sha.slice(0, 12)))).toBe(false);
+      expect(readInstallManifest(paths)).toBeNull();
+      expect(baseRunner.mock.calls.some(([file, args]) => file === "npm" && args[0] === "install")).toBe(false);
+    } else {
+      await expect(install).resolves.toMatchObject({ version: "0.3.1", reused: false });
+      expect(packaged).toEqual(["packages/shared", "packages/db", "server"]);
+    }
+  });
+
   it("does not publish a payload when UI preparation fails", async () => {
     const sha = "f".repeat(40);
     const paths = resolveInstallStorePaths();
