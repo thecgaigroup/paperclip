@@ -168,6 +168,63 @@ describe("managed install commands", () => {
     expect(installCall?.[1].filter((arg) => arg.endsWith(".tgz"))).toHaveLength(4);
   });
 
+  it("prepares UI from a clean checkout before packaging the server", async () => {
+    const sha = "e".repeat(40);
+    const baseRunner = createGitCheckoutRunCommand(sha);
+    let checkout = "";
+    let prepared = false;
+    const runCommand: CommandRunner = async (file, args, options) => {
+      if (file === "bash" && args[0] === "scripts/prepare-server-ui-dist.sh") {
+        expect(fs.existsSync(path.join(checkout, "server/ui-dist"))).toBe(false);
+        expect(options?.env?.PAPERCLIP_RELEASE_REUSE_UI_DIST).toBe("0");
+        fs.mkdirSync(path.join(checkout, "server/ui-dist"), { recursive: true });
+        fs.writeFileSync(path.join(checkout, "server/ui-dist/index.html"), "fresh UI");
+        prepared = true;
+      }
+      if (file === process.execPath && args[0]?.endsWith("prepare-bundled-package.mjs") && args[1] === path.join(checkout, "server")) {
+        expect(prepared, "server packaging requires the UI preparation step").toBe(true);
+        expect(fs.readFileSync(path.join(checkout, "server/ui-dist/index.html"), "utf8")).toBe("fresh UI");
+        fs.mkdirSync(args[2], { recursive: true });
+        fs.writeFileSync(path.join(args[2], "package.json"), JSON.stringify({ name: "@paperclipai/server" }));
+        return { stdout: "", stderr: "" };
+      }
+      if (file === "npm" && args[0] === "pack" && args[1]?.includes("workspace-package-") &&
+          JSON.parse(fs.readFileSync(path.join(args[1], "package.json"), "utf8")).name === "@paperclipai/server") {
+        fs.writeFileSync(path.join(args[args.indexOf("--pack-destination") + 1], "paperclipai-server-0.3.1.tgz"), "package");
+        return { stdout: "", stderr: "" };
+      }
+      const result = await baseRunner(file, args, options);
+      if (file === "tar") {
+        checkout = args[args.indexOf("-C") + 1];
+        expect(fs.existsSync(path.join(checkout, "server/ui-dist"))).toBe(false);
+        const serverManifest = path.join(checkout, "server/package.json");
+        const serverPackage = JSON.parse(fs.readFileSync(serverManifest, "utf8"));
+        fs.writeFileSync(serverManifest, JSON.stringify({ ...serverPackage, bundleDependencies: ["express"] }));
+      }
+      return result;
+    };
+    await expect(installGitPayload("paperclipai/paperclip", sha, runCommand, resolveInstallStorePaths()))
+      .resolves.toMatchObject({ version: "0.3.1", reused: false });
+    expect(prepared).toBe(true);
+  });
+
+  it("does not publish a payload when UI preparation fails", async () => {
+    const sha = "f".repeat(40);
+    const paths = resolveInstallStorePaths();
+    const baseRunner = createGitCheckoutRunCommand(sha);
+    const runCommand: CommandRunner = async (file, args, options) => {
+      if (file === "bash" && args[0] === "scripts/prepare-server-ui-dist.sh") {
+        throw new Error("UI build failed");
+      }
+      return baseRunner(file, args, options);
+    };
+    await expect(installGitPayload("paperclipai/paperclip", sha, runCommand, paths))
+      .rejects.toThrow("UI build failed");
+    expect(fs.existsSync(payloadPathFor(paths, "git", sha.slice(0, 12)))).toBe(false);
+    expect(readInstallManifest(paths)).toBeNull();
+    expect(baseRunner.mock.calls.some(([file, args]) => file === "npm" && args[0] === "pack")).toBe(false);
+  });
+
   it("builds git checkouts with NODE_ENV cleared so ambient production mode keeps devDependencies", async () => {
     process.env.NODE_ENV = "production";
     const sha = "d".repeat(40);
@@ -178,7 +235,7 @@ describe("managed install commands", () => {
       file === "corepack" ||
       (file === "npm" && args[0] === "pack") ||
       (file === process.execPath && args[0]?.endsWith("prepare-bundled-package.mjs")));
-    expect(buildCalls).toHaveLength(9);
+    expect(buildCalls).toHaveLength(10);
     for (const call of buildCalls) {
       const env = call[2]?.env;
       expect(env, `${call[0]} ${call[1].join(" ")} must run with an explicit env`).toBeDefined();
