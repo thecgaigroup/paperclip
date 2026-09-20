@@ -21,6 +21,7 @@ import { bundledCliNpmDependencies } from "./cli-bundled-npm-dependencies.mjs";
 import {
   createBundledInstallManifest,
   materializePublishManifest,
+  readWorkspacePackageVersions,
   selectBundledDependencyPatches,
 } from "./prepare-bundled-package.mjs";
 
@@ -173,6 +174,44 @@ test("bundled package staging materializes workspace dependency versions", () =>
     caret: "^2026.723.0",
     tilde: "~2026.723.0",
   });
+});
+
+test("bundled staging uses each workspace dependency's own version", () => {
+  const staged = materializePublishManifest({
+    name: "@paperclipai/example", version: "0.3.1",
+    dependencies: { exact: "workspace:*", untouched: "^4.0.0" },
+    optionalDependencies: { caret: "workspace:^" },
+    peerDependencies: { tilde: "workspace:~" },
+  }, { exact: "1.0.0", caret: "2.0.0", tilde: "3.0.0" });
+  assert.deepEqual(staged.dependencies, { exact: "1.0.0", untouched: "^4.0.0" });
+  assert.deepEqual(staged.optionalDependencies, { caret: "^2.0.0" });
+  assert.deepEqual(staged.peerDependencies, { tilde: "~3.0.0" });
+});
+
+test("bundled staging rejects a missing workspace version instead of guessing", () => {
+  assert.throws(() => materializePublishManifest({
+    name: "@paperclipai/example", version: "0.3.1",
+    dependencies: { missing: "workspace:*" },
+  }, {}), /Missing workspace dependency version: missing/);
+});
+
+test("the prepared server references the actual plugin SDK version", () => {
+  const versions = readWorkspacePackageVersions();
+  const sdk = JSON.parse(readFileSync(new URL("../packages/plugins/sdk/package.json", import.meta.url), "utf8"));
+  const staged = materializePublishManifest(serverPackage, versions);
+  assert.equal(staged.dependencies["@paperclipai/plugin-sdk"], sdk.version);
+});
+
+test("workspace version discovery rejects a release map/package identity mismatch", (t) => {
+  const sourceRoot = mkdtempSync(join(tmpdir(), "paperclip-workspace-versions-"));
+  t.after(() => rmSync(sourceRoot, { recursive: true, force: true }));
+  mkdirSync(join(sourceRoot, "scripts"));
+  mkdirSync(join(sourceRoot, "dependency"));
+  writeFileSync(join(sourceRoot, "scripts/release-package-manifest.json"),
+    JSON.stringify([{ name: "expected", dir: "dependency" }]));
+  writeFileSync(join(sourceRoot, "dependency/package.json"),
+    JSON.stringify({ name: "different", version: "1.0.0" }));
+  assert.throws(() => readWorkspacePackageVersions(sourceRoot), /Invalid workspace package version: expected/);
 });
 
 test("bundled package staging installs only dependencies included in the tarball", () => {

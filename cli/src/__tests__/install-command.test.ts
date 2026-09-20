@@ -139,8 +139,8 @@ describe("managed install commands", () => {
         return { stdout: "", stderr: "" };
       }
       if (file === "bash") return { stdout: "", stderr: "" };
-      if (file === "npm" && args[0] === "pack") {
-        const packageName = args[1]?.includes("workspace-package-") ? "paperclipai-db" : "paperclipai";
+      if ((file === "npm" && args[0] === "pack") || (file === "npx" && args[2] === "pack")) {
+        const packageName = file === "npx" ? "paperclipai-db" : "paperclipai";
         fs.writeFileSync(path.join(args[args.indexOf("--pack-destination") + 1], `${packageName}-0.3.1.tgz`), "package");
         return { stdout: "", stderr: "" };
       }
@@ -166,9 +166,45 @@ describe("managed install commands", () => {
     expect(runCommand.mock.calls.filter(([command, args]) => command === "corepack" && args[1] === "install")).toHaveLength(1);
     expect(runCommand.mock.calls.filter(([command, args]) => command === "corepack" && args.includes("pack"))).toHaveLength(2);
     expect(runCommand.mock.calls.filter(([command, args]) => command === process.execPath && args[0]?.endsWith("prepare-bundled-package.mjs"))).toHaveLength(1);
-    expect(runCommand.mock.calls.filter(([command, args]) => command === "npm" && args[0] === "pack")).toHaveLength(2);
+    expect(runCommand.mock.calls.filter(([command, args]) => command === "npm" && args[0] === "pack")).toHaveLength(1);
+    expect(runCommand.mock.calls.filter(([command, args]) => command === "npx" && args[2] === "pack")).toHaveLength(1);
     const installCall = runCommand.mock.calls.find(([command, args]) => command === "npm" && args[0] === "install");
     expect(installCall?.[1].filter((arg) => arg.endsWith(".tgz"))).toHaveLength(4);
+  });
+
+  it("packs prepared bundled assets without rerunning source-only lifecycle scripts", async () => {
+    const sha = "9".repeat(40);
+    const baseRunner = createGitCheckoutRunCommand(sha);
+    let packed = false;
+    const runCommand: CommandRunner = async (file, args, options) => {
+      if (file === process.execPath && args[0]?.endsWith("prepare-bundled-package.mjs")) {
+        fs.mkdirSync(path.join(args[2], "dist"), { recursive: true });
+        fs.writeFileSync(path.join(args[2], "dist/index.js"), "export const ready = true;\n");
+        fs.writeFileSync(path.join(args[2], "package.json"), JSON.stringify({
+          name: "@paperclipai/db", version: "0.3.1", files: ["dist"],
+          scripts: { prepack: "node missing-source-build-script.js" },
+        }));
+        return { stdout: "", stderr: "" };
+      }
+      if (file === "npx" && args[2] === "pack" && args[3]?.includes("workspace-package-")) {
+        expect(args.slice(0, 3)).toEqual(["--yes", "npm@10.9.7", "pack"]);
+        // Run installed npm offline here; the release-tool selection is asserted above.
+        const stdout = execFileSync("npm", args.slice(2), {
+          cwd: options?.cwd, encoding: "utf8", timeout: 30_000,
+          env: { ...options?.env, PATH: ORIGINAL_ENV.PATH, npm_config_offline: "true" },
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        const archive = path.join(args[args.indexOf("--pack-destination") + 1], "paperclipai-db-0.3.1.tgz");
+        expect(execFileSync("tar", ["-xOf", archive, "package/dist/index.js"], { encoding: "utf8" }))
+          .toBe("export const ready = true;\n");
+        packed = true;
+        return { stdout, stderr: "" };
+      }
+      return baseRunner(file, args, options);
+    };
+    await expect(installGitPayload("paperclipai/paperclip", sha, runCommand, resolveInstallStorePaths()))
+      .resolves.toMatchObject({ version: "0.3.1", reused: false });
+    expect(packed).toBe(true);
   });
 
   it("prepares UI from a clean checkout before packaging the server", async () => {
@@ -191,8 +227,8 @@ describe("managed install commands", () => {
         fs.writeFileSync(path.join(args[2], "package.json"), JSON.stringify({ name: "@paperclipai/server" }));
         return { stdout: "", stderr: "" };
       }
-      if (file === "npm" && args[0] === "pack" && args[1]?.includes("workspace-package-") &&
-          JSON.parse(fs.readFileSync(path.join(args[1], "package.json"), "utf8")).name === "@paperclipai/server") {
+      if (file === "npx" && args[2] === "pack" && args[3]?.includes("workspace-package-") &&
+          JSON.parse(fs.readFileSync(path.join(args[3], "package.json"), "utf8")).name === "@paperclipai/server") {
         fs.writeFileSync(path.join(args[args.indexOf("--pack-destination") + 1], "paperclipai-server-0.3.1.tgz"), "package");
         return { stdout: "", stderr: "" };
       }
@@ -241,8 +277,8 @@ describe("managed install commands", () => {
           return { stdout: "", stderr: "" };
         }
       }
-      if (file === "npm" && args[0] === "pack" && args[1]?.includes("workspace-package-") &&
-          JSON.parse(fs.readFileSync(path.join(args[1], "package.json"), "utf8")).name === "@paperclipai/server") {
+      if (file === "npx" && args[2] === "pack" && args[3]?.includes("workspace-package-") &&
+          JSON.parse(fs.readFileSync(path.join(args[3], "package.json"), "utf8")).name === "@paperclipai/server") {
         fs.writeFileSync(path.join(args[args.indexOf("--pack-destination") + 1], "paperclipai-server-0.3.1.tgz"), "package");
         return { stdout: "", stderr: "" };
       }
@@ -295,7 +331,7 @@ describe("managed install commands", () => {
       .rejects.toThrow("UI build failed");
     expect(fs.existsSync(payloadPathFor(paths, "git", sha.slice(0, 12)))).toBe(false);
     expect(readInstallManifest(paths)).toBeNull();
-    expect(baseRunner.mock.calls.some(([file, args]) => file === "npm" && args[0] === "pack")).toBe(false);
+    expect(baseRunner.mock.calls.some(([file, args]) => (file === "npm" && args[0] === "pack") || file === "npx")).toBe(false);
   });
 
   it("stamps a clean archive build with the resolved SHA instead of ambient provenance", async () => {
@@ -337,7 +373,7 @@ describe("managed install commands", () => {
     const buildCalls = runCommand.mock.calls.filter(([file, args]) =>
       file === "bash" ||
       file === "corepack" ||
-      (file === "npm" && args[0] === "pack") ||
+      (file === "npm" && args[0] === "pack") || file === "npx" ||
       (file === process.execPath && args[0]?.endsWith("prepare-bundled-package.mjs")));
     expect(buildCalls).toHaveLength(10);
     for (const call of buildCalls) {

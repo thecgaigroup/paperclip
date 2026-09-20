@@ -7,7 +7,18 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
-export function materializePublishManifest(pkg) {
+export function readWorkspacePackageVersions(sourceRoot = repoRoot) {
+  const packages = JSON.parse(readFileSync(resolve(sourceRoot, "scripts/release-package-manifest.json"), "utf8"));
+  return Object.fromEntries(packages.map(({ name, dir }) => {
+    const pkg = JSON.parse(readFileSync(resolve(sourceRoot, dir, "package.json"), "utf8"));
+    if (pkg.name !== name || typeof pkg.version !== "string" || !pkg.version) {
+      throw new Error(`Invalid workspace package version: ${name}`);
+    }
+    return [name, pkg.version];
+  }));
+}
+
+export function materializePublishManifest(pkg, workspaceVersions) {
   const publishConfig = pkg.publishConfig ?? {};
   const publishManifest = { ...pkg };
 
@@ -22,7 +33,11 @@ export function materializePublishManifest(pkg) {
         if (typeof specifier !== "string" || !specifier.startsWith("workspace:")) return [name, specifier];
         const range = specifier.slice("workspace:".length);
         const prefix = range === "^" || range === "~" ? range : "";
-        return [name, `${prefix}${pkg.version}`];
+        const version = workspaceVersions === undefined ? pkg.version : workspaceVersions[name];
+        if (typeof version !== "string" || !version) {
+          throw new Error(`Missing workspace dependency version: ${name}`);
+        }
+        return [name, `${prefix}${version}`];
       }),
     );
   }
@@ -156,7 +171,7 @@ export function prepareBundledPackage(sourceDir, destinationDir, { sourceRoot = 
   }
 
   const deployedPackagePath = resolve(destinationDir, "package.json");
-  const publishManifest = materializePublishManifest(sourcePackage);
+  const publishManifest = materializePublishManifest(sourcePackage, readWorkspacePackageVersions(sourceRoot));
   const installManifest = createBundledInstallManifest(publishManifest, bundledDependencies);
   writeFileSync(deployedPackagePath, `${JSON.stringify(installManifest, null, 2)}\n`);
 
