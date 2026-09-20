@@ -301,10 +301,14 @@ describe("managed install commands", () => {
   it("stamps a clean archive build with the resolved SHA instead of ambient provenance", async () => {
     const sha = "3".repeat(40);
     process.env.PAPERCLIP_BUILD_COMMIT = "unrelated-ambient-commit";
+    process.env.PAPERCLIP_README_ASSET_REF = "unrelated-ambient-ref";
     const baseRunner = createGitCheckoutRunCommand(sha);
     let checkout = "";
     let stampChecked = false;
     const runCommand: CommandRunner = async (file, args, options) => {
+      if (file === "bash" && args[0] === "scripts/build-npm.sh") {
+        expect(options?.env?.PAPERCLIP_README_ASSET_REF).toBe(sha);
+      }
       if (file === "corepack" && args.includes("@paperclipai/server...")) {
         expect(options?.env?.PAPERCLIP_BUILD_COMMIT).toBe(sha);
         execFileSync(process.execPath, [fs.realpathSync(path.join(checkout, "server/scripts/write-build-stamp.mjs"))], { env: options?.env });
