@@ -7,6 +7,7 @@ import {
   budgetPolicies,
   companies,
   costEvents,
+  heartbeatRuns,
   projects,
 } from "@paperclipai/db";
 import type {
@@ -249,13 +250,59 @@ export function budgetService(db: Db, hooks: BudgetServiceHooks = {}) {
       .where(eq(companies.id, policy.scopeId));
   }
 
+  async function parkRunsForBudget(policy: PolicyRow) {
+    // Following ACP pattern: park runs at budget cap instead of cancelling
+    // Mark all running runs for this scope as awaiting_approval
+    const conditions = [
+      eq(heartbeatRuns.companyId, policy.companyId),
+      eq(heartbeatRuns.status, "running"),
+    ];
+    
+    if (policy.scopeType === "agent") {
+      conditions.push(eq(heartbeatRuns.agentId, policy.scopeId));
+    }
+    
+    await db
+      .update(heartbeatRuns)
+      .set({
+        status: "awaiting_approval",
+        updatedAt: new Date(),
+      })
+      .where(and(...conditions));
+  }
+
+  async function resumeParkedRunsForScope(
+    companyId: string,
+    scopeType: BudgetScopeType,
+    scopeId: string,
+  ) {
+    // Resume runs that were parked due to budget caps
+    const conditions = [
+      eq(heartbeatRuns.companyId, companyId),
+      eq(heartbeatRuns.status, "awaiting_approval"),
+    ];
+    
+    if (scopeType === "agent") {
+      conditions.push(eq(heartbeatRuns.agentId, scopeId));
+    }
+    
+    const resumed = await db
+      .update(heartbeatRuns)
+      .set({
+        status: "running",
+        updatedAt: new Date(),
+      })
+      .where(and(...conditions))
+      .returning();
+    
+    return resumed.length;
+  }
+
   async function pauseAndCancelScopeForBudget(policy: PolicyRow) {
+    // First park any running runs (following ACP pattern)
+    await parkRunsForBudget(policy);
+    // Then pause the scope as fallback to prevent new runs
     await pauseScopeForBudget(policy);
-    await hooks.cancelWorkForScope?.({
-      companyId: policy.companyId,
-      scopeType: policy.scopeType as BudgetScopeType,
-      scopeId: policy.scopeId,
-    });
   }
 
   async function resumeScopeFromBudget(policy: PolicyRow) {
@@ -592,6 +639,12 @@ export function budgetService(db: Db, hooks: BudgetServiceHooks = {}) {
         const observedAmount = await computeObservedAmount(db, row);
         if (observedAmount < amount) {
           await resumeScopeFromBudget(row);
+          // Resume any parked runs for this scope (ACP pattern)
+          await resumeParkedRunsForScope(
+            row.companyId,
+            row.scopeType as BudgetScopeType,
+            row.scopeId,
+          );
           await resolveOpenIncidentsForPolicy(row.id, actorUserId ? "approved" : null, actorUserId);
         } else {
           const softThreshold = Math.ceil((row.amount * row.warnPercent) / 100);
@@ -720,6 +773,28 @@ export function budgetService(db: Db, hooks: BudgetServiceHooks = {}) {
       agentId: string,
       context?: { issueId?: string | null; projectId?: string | null },
     ) => {
+      // Check for parked runs awaiting approval (ACP pattern)
+      const parkedRuns = await db
+        .select({ id: heartbeatRuns.id })
+        .from(heartbeatRuns)
+        .where(
+          and(
+            eq(heartbeatRuns.companyId, companyId),
+            eq(heartbeatRuns.agentId, agentId),
+            eq(heartbeatRuns.status, "awaiting_approval"),
+          ),
+        )
+        .limit(1);
+      
+      if (parkedRuns.length > 0) {
+        return {
+          scopeType: "agent" as const,
+          scopeId: agentId,
+          scopeName: "agent",
+          reason: "Agent has runs awaiting budget approval. Raise the budget to resume work.",
+        };
+      }
+
       const agent = await db
         .select({
           status: agents.status,
@@ -911,6 +986,14 @@ export function budgetService(db: Db, hooks: BudgetServiceHooks = {}) {
         }
 
         await resumeScopeFromBudget(policy);
+        
+        // Resume any parked runs for this scope (ACP pattern)
+        await resumeParkedRunsForScope(
+          policy.companyId,
+          policy.scopeType as BudgetScopeType,
+          policy.scopeId,
+        );
+        
         await db
           .update(budgetIncidents)
           .set({
