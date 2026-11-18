@@ -19426,6 +19426,18 @@ export function heartbeatService(
         occurredAt: new Date(),
       });
     }
+
+    // Record token usage on the run itself, following ACP pattern (per-run token logging)
+    await db
+      .update(heartbeatRuns)
+      .set({
+        inputTokens,
+        outputTokens,
+        cachedInputTokens,
+        costUsd: additionalCostCents,
+        updatedAt: new Date(),
+      })
+      .where(eq(heartbeatRuns.id, run.id));
   }
 
   async function startNextQueuedRunForAgent(agentId: string) {

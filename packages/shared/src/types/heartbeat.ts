@@ -190,6 +190,10 @@ export interface HeartbeatRun {
   signal: string | null;
   usageJson: Record<string, unknown> | null;
   resultJson: Record<string, unknown> | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cachedInputTokens: number | null;
+  costUsd: number | null;
   sessionIdBefore: string | null;
   sessionIdAfter: string | null;
   logStore: string | null;
