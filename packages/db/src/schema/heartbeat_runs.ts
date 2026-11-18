@@ -44,7 +44,7 @@ export const heartbeatRuns = pgTable(
     inputTokens: integer("input_tokens"),
     outputTokens: integer("output_tokens"),
     cachedInputTokens: integer("cached_input_tokens"),
-    costUsd: integer("cost_usd"),
+    costCents: integer("cost_cents"),
     runtimeMode: text("runtime_mode").notNull().default("legacy"),
     runtimeModeResolverVersion: text("runtime_mode_resolver_version"),
     runtimeModeReason: text("runtime_mode_reason"),

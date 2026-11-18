@@ -193,7 +193,7 @@ export interface HeartbeatRun {
   inputTokens: number | null;
   outputTokens: number | null;
   cachedInputTokens: number | null;
-  costUsd: number | null;
+  costCents: number | null;
   sessionIdBefore: string | null;
   sessionIdAfter: string | null;
   logStore: string | null;

@@ -1,5 +1,5 @@
 {
-  "id": "e4ed923e-3ac3-42d4-9abf-2a38449c453b",
+  "id": "c4f99e27-9652-4947-a6a9-4a37906c6d89",
   "prevId": "4770ad6d-2cdc-45c4-af89-c300fd134d91",
   "version": "7",
   "dialect": "postgresql",
@@ -22177,8 +22177,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "cost_usd": {
-          "name": "cost_usd",
+        "cost_cents": {
+          "name": "cost_cents",
           "type": "integer",
           "primaryKey": false,
           "notNull": false

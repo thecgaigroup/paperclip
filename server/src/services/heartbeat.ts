@@ -19434,7 +19434,7 @@ export function heartbeatService(
         inputTokens,
         outputTokens,
         cachedInputTokens,
-        costUsd: additionalCostCents,
+        costCents: additionalCostCents,
         updatedAt: new Date(),
       })
       .where(eq(heartbeatRuns.id, run.id));
